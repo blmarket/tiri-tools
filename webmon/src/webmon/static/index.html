@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>webmon</title>
+<link rel="stylesheet" href="/vendor/xterm.css">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div id="layout">
+  <aside id="rail">
+    <header id="rail-head">
+      <span id="brand">webmon</span>
+      <span id="tier" class="badge">…</span>
+    </header>
+    <div id="status"></div>
+    <div id="tree"></div>
+    <footer id="rail-foot"><span id="socket"></span></footer>
+  </aside>
+  <main id="stage">
+    <header id="stage-head">
+      <span id="selected">no pane selected</span>
+      <span id="screen-state"></span>
+    </header>
+    <div id="screen-wrap"><div id="screen"></div></div>
+  </main>
+</div>
+<script src="/vendor/xterm.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

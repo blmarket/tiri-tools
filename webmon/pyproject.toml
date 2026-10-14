@@ -1,0 +1,29 @@
+[project]
+name = "hmux-webmon"
+version = "0.1.0"
+description = "Read-only browser view of an hmux/tmux server, over control mode."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["websockets>=15,<17", "cryptography>=42", "hmux-agentmon"]
+
+[tool.uv.sources]
+hmux-agentmon = { path = "../hmux1/agentmon-tui" }
+
+[dependency-groups]
+dev = [
+    "pytest",
+]
+
+[project.scripts]
+webmon = "webmon.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/webmon"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
