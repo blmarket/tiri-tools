@@ -4,10 +4,10 @@ version = "0.1.0"
 description = "Read-only browser view of an hmux/tmux server, over control mode."
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["websockets>=15,<17", "cryptography>=42", "hmux-agentmon"]
+dependencies = ["websockets>=15,<17", "cryptography>=42", "tiri-agentmon"]
 
 [tool.uv.sources]
-hmux-agentmon = { path = "../hmux1/agentmon-tui" }
+tiri-agentmon = { path = "../agentmon-tui" }
 
 [dependency-groups]
 dev = [
