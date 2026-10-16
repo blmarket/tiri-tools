@@ -1,8 +1,8 @@
 # tiri-agentmon
 
-`agentmon` is a reviewable TUI for creating coding-agent runs in sibling git
-worktrees and monitoring their real tiri agent status. `looper` is a headless
-companion that re-runs one prompt for as long as quota pacing allows.
+`agentmon` is a TUI for monitoring coding agents through their real tiri agent
+status. It only watches: it never starts an agent. `looper` is the headless
+companion that does, re-running one prompt for as long as quota pacing allows.
 
 ## HOWTO
 
@@ -21,11 +21,10 @@ prompt.md`.
 
 See command palette(Ctrl + P) for list of available commands.
 
-Runs are monitored for the session `agentmon` itself sits in, and new runs are
-opened there too. A window linked into more than one session therefore appears
-once rather than once per session. Started outside tiri — from a plain terminal
-with `--socket` or `TIRI_SOCKET` — there is no such session, so every session on
-the server is monitored and new runs go to session `0`.
+Runs are monitored for the session `agentmon` itself sits in. A window linked
+into more than one session therefore appears once rather than once per session.
+Started outside tiri — from a plain terminal with `--socket` or `TIRI_SOCKET` —
+there is no such session, so every session on the server is monitored.
 
 ## looper
 

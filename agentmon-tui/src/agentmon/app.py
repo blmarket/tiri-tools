@@ -1,14 +1,10 @@
 from __future__ import annotations
 
 import argparse
-import os
 import random
-import shlex
 import subprocess
-import tempfile
 import threading
 from collections.abc import Iterable
-from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -18,42 +14,17 @@ from textual import work
 from textual.app import App, ComposeResult, SystemCommand
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.events import Key
 from textual.screen import ModalScreen, Screen
 from textual.timer import Timer
-from textual.widgets import (
-    Button,
-    Checkbox,
-    DataTable,
-    Footer,
-    Input,
-    Label,
-    Select,
-    Static,
-    TextArea,
-)
+from textual.widgets import Button, DataTable, Footer, Label, Static
 
 from . import __version__
-from .model import (
-    AgentRun,
-    DEFAULT_LAUNCH_AGENT,
-    DEFAULT_LAUNCH_CHOICE,
-    LAUNCH_AGENT_EFFORTS,
-    LAUNCH_AGENT_LABELS,
-    LAUNCH_AGENT_MODELS,
-    LAUNCH_CHOICE_LABELS,
-    LaunchDraft,
-    LaunchStep,
-    PromptHistory,
-    Repository,
-    normalize_launch_agent,
-)
+from .model import AGENT_LABELS, AgentRun, Repository
 from .quota import DEFAULT_TTL_SECONDS, QuotaReport, QuotaService, QuotaWindow
 from .services import (
     AgentmonService,
     CommandError,
     WorktreeOverview,
-    devshell_available,
     discover_context,
     discover_repository,
 )
@@ -198,29 +169,8 @@ class NavigableDataTable(DataTable):
         self._jump_worktree_cursor(range(self.row_count - 1, -1, -1))
 
 
-class HistorySearchInput(Input):
-    """Keep search active while arrow keys move through matching prompts."""
-
-    def on_key(self, event: Key) -> None:
-        screen = self.screen
-        if not isinstance(screen, HistoryScreen):
-            return
-        if event.key == "up":
-            screen.move_selection(-1)
-        elif event.key == "down":
-            screen.move_selection(1)
-        else:
-            return
-        event.prevent_default()
-        event.stop()
-
-
 class DashboardScreen(Screen):
     BINDINGS = [
-        ("n", "prepare_worktree", "Prepare worktree"),
-        ("i", "edit_instruction", "Instruction"),
-        ("l", "launch_agent", "Launch agent"),
-        ("s", "new_run", "Simple run"),
         Binding("enter", "open_run", "Open window", priority=True),
         ("w", "new_window", "New shell at CWD"),
         ("x", "cleanup", "Clean up worktree"),
@@ -403,7 +353,7 @@ class DashboardScreen(Screen):
         self.query_one("#title", Static).update(f"agentmon    {summary or 'no active runs'}")
         notice = self.app.startup_warning
         if not runs and not notice:
-            notice = "No agent runs found — press n to prepare one"
+            notice = "No agent runs found"
         self._set_notice(notice)
         if first_worktree_row is not None:
             table.move_cursor(
@@ -466,7 +416,7 @@ class DashboardScreen(Screen):
             return
 
         agent_key = "claude" if run.agent == "claude-code" else run.agent
-        agent_name = LAUNCH_AGENT_LABELS.get(agent_key, run.agent)
+        agent_name = AGENT_LABELS.get(agent_key, run.agent)
         if run.state == "none":
             self._transcript_session_id = None
             self._transcript_signature = None
@@ -872,102 +822,6 @@ class DashboardScreen(Screen):
     def action_reload(self) -> None:
         self.refresh_runs()
 
-    def action_new_run(self) -> None:
-        repository = self._selected_repository() or self.app.service.repo
-        if repository is None:
-            self._set_notice(
-                "Select a Git repository or Git-backed window to create a run"
-            )
-            return
-        self.app.push_screen(NewRunScreen(repository=repository))
-
-    def action_prepare_worktree(self) -> None:
-        repository = self._selected_repository() or self.app.service.repo
-        if repository is None:
-            self._set_notice(
-                "Select a Git repository or Git-backed window to prepare a worktree"
-            )
-            return
-        run = self._selected_run()
-        base = (
-            run.branch
-            if run is not None and run.branch and run.branch != "(detached)"
-            else None
-        )
-        self.app.push_screen(
-            PrepareWorktreeScreen(repository=repository, base=base)
-        )
-
-    def action_edit_instruction(self) -> None:
-        run = self._selected_run()
-        if run is None:
-            return
-        if run.repository is None:
-            self._set_notice("This window is not associated with a Git repository")
-            return
-        service = self.app.service.for_run(run)
-        try:
-            path = service.instruction_edit_target(run)
-        except (CommandError, OSError) as exc:
-            self._set_notice(str(exc))
-            return
-        editor = shlex.split(os.environ.get("EDITOR", "vi"))
-        try:
-            with self.app.suspend():
-                result = subprocess.run([*editor, str(path)], check=False)
-        except OSError as exc:
-            self._set_notice(f"Could not open editor: {exc}")
-            return
-        if result.returncode != 0:
-            self._set_notice(
-                f"Editor exited with status {result.returncode}; nothing committed"
-            )
-            return
-        try:
-            commit = service.commit_instruction(run)
-        except CommandError as exc:
-            self._set_notice(str(exc))
-            return
-        self._set_notice(
-            f"instruction.md committed ({commit})"
-            if commit
-            else "instruction.md unchanged"
-        )
-
-    def action_launch_agent(self) -> None:
-        run = self._selected_run()
-        if run is None:
-            return
-        if run.repository is None:
-            self._set_notice("This window is not associated with a Git repository")
-            return
-        self.app.push_screen(LaunchAgentScreen(run))
-
-    def action_populate_run(self) -> None:
-        run = self._selected_run()
-        if run is None:
-            return
-        if run.repository is None:
-            self._set_notice("This window is not associated with a Git repository")
-            return
-        service = self.app.service.for_run(run)
-        try:
-            draft = service.populate_draft(run)
-        except CommandError as exc:
-            self._set_notice(str(exc))
-            return
-        if draft.restart_worktree:
-            self.app.push_screen(NewRunScreen(restart_draft=draft))
-        else:
-            self.app.push_screen(
-                NewRunScreen(
-                    branch=draft.branch,
-                    prompt=draft.prompt,
-                    agent=draft.agent,
-                    repository=draft.repository or service.repo,
-                )
-            )
-
     def action_open_run(self) -> None:
         run = self._selected_run()
         if run is None:
@@ -1036,465 +890,6 @@ class DashboardScreen(Screen):
         self.app.exit()
 
 
-class NewRunScreen(Screen):
-    BINDINGS = [("escape", "back", "Back")]
-
-    def __init__(
-        self, *, branch: str = "", prompt: str = "", agent: str = "codex",
-        restart_draft: LaunchDraft | None = None,
-        repository: Repository | None = None,
-    ) -> None:
-        super().__init__()
-        self.restart_draft = restart_draft
-        self.repository = (
-            restart_draft.repository if restart_draft is not None else repository
-        )
-        self.prompt = restart_draft.prompt if restart_draft else prompt
-        self.initial_branch = restart_draft.branch if restart_draft else branch
-        self.initial_agent = normalize_launch_agent(
-            restart_draft.agent if restart_draft else agent
-        )
-
-    @property
-    def service(self) -> AgentmonService:
-        return self.app.service.for_repository(self.repository)
-
-    def compose(self) -> ComposeResult:
-        with VerticalScroll(id="dialog", classes="new-run"):
-            yield Label("New run", classes="dialog-title")
-            yield Label(f"Repository     {self.service.repo.root}")
-            with Horizontal(id="draft-fields"):
-                with Vertical(classes="draft-field"):
-                    yield Label("Agent")
-                    yield Select(
-                        [
-                            (label, agent)
-                            for agent, label in LAUNCH_AGENT_LABELS.items()
-                        ],
-                        value=self.initial_agent,
-                        allow_blank=False,
-                        id="agent",
-                    )
-                with Vertical(classes="draft-field"):
-                    yield Label("Branch")
-                    yield Input(
-                        value=self.initial_branch,
-                        placeholder="feature-name",
-                        id="branch",
-                        disabled=self.restart_draft is not None,
-                    )
-                with Vertical(classes="draft-field"):
-                    yield Label("Dev shell")
-                    # The worktree does not exist until launch, so the repo root
-                    # stands in for the flake the new branch will carry.
-                    devshell = devshell_available(self.service.repo.root)
-                    yield Checkbox(
-                        "nix develop",
-                        value=devshell,
-                        disabled=not devshell,
-                        id="devshell",
-                    )
-            yield Static("Worktree       —", id="worktree")
-            yield Static("Instruction    Not written", id="prompt-status")
-            with Horizontal(classes="buttons"):
-                yield Button("Open $EDITOR", id="edit")
-                yield Button("Choose historical commit", id="history")
-            yield Static("", id="error")
-            with Horizontal(classes="buttons"):
-                yield Button("Continue", id="continue", classes="dialog-action", disabled=True)
-                yield Button("Cancel", id="cancel")
-
-    def on_mount(self) -> None:
-        self._update_summary()
-        self.query_one("#branch", Input).focus()
-
-    def on_input_changed(self, event: Input.Changed) -> None:
-        if event.input.id == "branch":
-            self._update_summary()
-
-    def _update_summary(self) -> None:
-        branch = self.query_one("#branch", Input).value if self.is_mounted else self.initial_branch
-        path = self.service.suggested_worktree(branch)
-        self.query_one("#worktree", Static).update(f"Worktree       {path}")
-        lines = len(self.prompt.splitlines())
-        if self.prompt:
-            preview = next((x.strip() for x in self.prompt.splitlines() if x.strip()), "")
-            self.query_one("#prompt-status", Static).update(
-                f"Instruction    Ready · {lines} lines\n               {preview[:68]}"
-            )
-        else:
-            self.query_one("#prompt-status", Static).update("Instruction    Not written")
-        self._update_continue_state(branch)
-
-    def _update_continue_state(self, branch: str) -> None:
-        """Keep the primary action available only for a valid draft."""
-        button = self.query_one("#continue", Button)
-        error = self.query_one("#error", Static)
-        if self.restart_draft is not None:
-            button.disabled = not self.prompt.strip()
-            error.remove_class("guidance", "validation-error")
-            error.add_class("overwrite-info")
-            error.update(
-                f"Existing merged worktree will be restarted: {self.restart_draft.worktree}"
-            )
-            return
-        try:
-            draft = self.service.validate_draft(branch, self.prompt)
-        except ValueError as exc:
-            button.disabled = True
-            message = str(exc)
-            incomplete = message in {
-                "Enter a branch name",
-                "Write an instruction before continuing",
-            }
-            error.remove_class("overwrite-info")
-            error.set_class(incomplete, "guidance")
-            error.set_class(not incomplete, "validation-error")
-            error.update(message)
-        else:
-            button.disabled = False
-            error.remove_class("guidance", "validation-error")
-            if draft.overwrite_worktree:
-                error.add_class("overwrite-info")
-                error.update(f"Existing worktree will be replaced: {draft.worktree}")
-            elif draft.existing_branch:
-                error.add_class("overwrite-info")
-                error.update(f"Existing branch will be used: {draft.branch}")
-            else:
-                error.remove_class("overwrite-info")
-                error.update("")
-
-    def _edit_prompt(self) -> None:
-        editor = shlex.split(os.environ.get("EDITOR", "vi"))
-        fd, name = tempfile.mkstemp(prefix="agentmon-prompt-", suffix=".md")
-        path = Path(name)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write(self.prompt)
-            with self.app.suspend():
-                result = subprocess.run([*editor, str(path)], check=False)
-            if result.returncode == 0:
-                self.prompt = path.read_text(encoding="utf-8")
-                self._update_summary()
-        except OSError as exc:
-            self.query_one("#error", Static).update(f"Could not open editor: {exc}")
-        finally:
-            path.unlink(missing_ok=True)
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "edit":
-            self._edit_prompt()
-        elif event.button.id == "history":
-            self.app.push_screen(
-                HistoryScreen(repository=self.service.repo),
-                self._history_selected,
-            )
-        elif event.button.id == "continue":
-            branch = self.query_one("#branch", Input).value
-            agent = self.query_one("#agent", Select).value
-            selected_agent = agent if isinstance(agent, str) else DEFAULT_LAUNCH_AGENT
-            devshell = self.query_one("#devshell", Checkbox).value
-            if self.restart_draft is not None:
-                draft = LaunchDraft(
-                    branch=self.restart_draft.branch,
-                    worktree=self.restart_draft.worktree,
-                    prompt=self.prompt,
-                    overwrite_worktree=True,
-                    restart_worktree=True,
-                    agent=selected_agent,
-                    devshell=devshell,
-                    repository=self.service.repo,
-                )
-                self.app.push_screen(ConfirmScreen(draft))
-            else:
-                try:
-                    draft = self.service.validate_draft(branch, self.prompt)
-                except ValueError as exc:
-                    self.query_one("#error", Static).update(str(exc))
-                else:
-                    self.app.push_screen(
-                        ConfirmScreen(
-                            replace(draft, agent=selected_agent, devshell=devshell)
-                        )
-                    )
-        elif event.button.id == "cancel":
-            self.app.pop_screen()
-
-    def _history_selected(self, item: PromptHistory | None) -> None:
-        if item is not None:
-            self.prompt = item.prompt
-            self._update_summary()
-            self._edit_prompt()
-
-    def action_back(self) -> None:
-        self.app.pop_screen()
-
-
-class PrepareWorktreeScreen(Screen):
-    BINDINGS = [("escape", "back", "Back")]
-
-    def __init__(
-        self, *, repository: Repository, base: str | None = None
-    ) -> None:
-        super().__init__()
-        self.repository = repository
-        self.base = base
-
-    @property
-    def service(self) -> AgentmonService:
-        return self.app.service.for_repository(self.repository)
-
-    def compose(self) -> ComposeResult:
-        base = self.base or self.service.repo.branch
-        with VerticalScroll(id="dialog"):
-            yield Label("Prepare worktree", classes="dialog-title")
-            yield Label(f"Repository     {self.service.repo.root}")
-            yield Label(f"Fork from      {base}")
-            yield Label("Branch")
-            yield Input(placeholder="feature-name", id="branch")
-            yield Checkbox(f"Reset existing branch to {base}", id="reset")
-            yield Static("Worktree       —", id="worktree")
-            yield Static("", id="error")
-            with Horizontal(classes="buttons"):
-                yield Button("Create worktree", id="create", classes="dialog-action")
-                yield Button("Cancel", id="cancel")
-
-    def on_mount(self) -> None:
-        self.query_one("#branch", Input).focus()
-
-    def on_input_changed(self, event: Input.Changed) -> None:
-        if event.input.id == "branch":
-            branch = event.value.strip()
-            path = self.service.suggested_worktree(branch) if branch else "—"
-            self.query_one("#worktree", Static).update(f"Worktree       {path}")
-
-    def on_input_submitted(self, _event: Input.Submitted) -> None:
-        self._create()
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "create":
-            self._create()
-        else:
-            self.app.pop_screen()
-
-    def _create(self) -> None:
-        self._branch = self.query_one("#branch", Input).value
-        self._reset = self.query_one("#reset", Checkbox).value
-        self.query_one("#create", Button).disabled = True
-        self._prepare()
-
-    @work(thread=True, exclusive=True)
-    def _prepare(self) -> None:
-        try:
-            worktree = self.service.prepare_worktree(
-                self._branch, base=self.base, reset=self._reset
-            )
-        except (ValueError, CommandError, OSError) as exc:
-            self.app.call_from_thread(self._failed, str(exc))
-        else:
-            self.app.call_from_thread(self._created, worktree)
-
-    def _failed(self, message: str) -> None:
-        self.query_one("#error", Static).update(message)
-        self.query_one("#create", Button).disabled = False
-
-    def _created(self, worktree: Path) -> None:
-        self.app.pop_screen()
-        dashboard = self.app.screen
-        if isinstance(dashboard, DashboardScreen):
-            dashboard.refresh_runs()
-            dashboard._set_notice(f"Prepared worktree {worktree}")
-
-    def action_back(self) -> None:
-        self.app.pop_screen()
-
-
-class LaunchAgentScreen(Screen):
-    BINDINGS = [
-        ("escape", "back", "Back"),
-        ("a", "cycle_agent", "Agent"),
-        ("m", "cycle_model", "Model"),
-        ("e", "cycle_effort", "Effort"),
-        ("i", "edit_instruction", "Instruction"),
-    ]
-
-    def __init__(self, run: AgentRun) -> None:
-        super().__init__()
-        self.run = run
-        self.initial_agent = normalize_launch_agent(run.agent)
-
-    @property
-    def service(self) -> AgentmonService:
-        return self.app.service.for_run(self.run)
-
-    @staticmethod
-    def _choices(values: tuple[str, ...]) -> list[tuple[str, str]]:
-        return [
-            (
-                "(default)"
-                if value == DEFAULT_LAUNCH_CHOICE
-                else LAUNCH_CHOICE_LABELS.get(value, value),
-                value,
-            )
-            for value in values
-        ]
-
-    def compose(self) -> ComposeResult:
-        efforts = LAUNCH_AGENT_EFFORTS[self.initial_agent]
-        with VerticalScroll(id="dialog", classes="wide"):
-            yield Label(f"Launch agent · {self.run.branch}", classes="dialog-title")
-            yield Label(f"Worktree       {self.run.worktree}")
-            with Horizontal(id="launch-fields"):
-                with Vertical(classes="draft-field"):
-                    yield Label("Agent (a)")
-                    yield Select(
-                        [
-                            (label, agent)
-                            for agent, label in LAUNCH_AGENT_LABELS.items()
-                        ],
-                        value=self.initial_agent,
-                        allow_blank=False,
-                        id="agent",
-                    )
-                with Vertical(classes="draft-field"):
-                    yield Label("Model (m)")
-                    yield Select(
-                        self._choices(LAUNCH_AGENT_MODELS[self.initial_agent]),
-                        value=DEFAULT_LAUNCH_CHOICE,
-                        allow_blank=False,
-                        id="model",
-                    )
-                with Vertical(classes="draft-field"):
-                    yield Label("Effort (e)")
-                    yield Select(
-                        self._choices(efforts),
-                        value=DEFAULT_LAUNCH_CHOICE,
-                        allow_blank=False,
-                        id="effort",
-                        disabled=len(efforts) == 1,
-                    )
-                with Vertical(classes="draft-field"):
-                    yield Label("Dev shell")
-                    devshell = devshell_available(self.run.worktree)
-                    yield Checkbox(
-                        "nix develop",
-                        value=devshell,
-                        disabled=not devshell,
-                        id="devshell",
-                    )
-            yield Label("Instruction (i) — leave empty to start the agent without one")
-            yield TextArea(id="instruction")
-            yield Static("", id="error")
-            with Horizontal(classes="buttons"):
-                yield Button("Launch", id="launch", classes="dialog-action")
-                yield Button("Cancel", id="cancel")
-
-    def on_mount(self) -> None:
-        area = self.query_one("#instruction", TextArea)
-        area.text = self.service.run_instruction(self.run) or ""
-        # Start on the Agent picker so the a/m/e cycle shortcuts work without a
-        # keystroke first landing in the instruction box; Tab reaches the text.
-        self.query_one("#agent", Select).focus()
-
-    def on_select_changed(self, event: Select.Changed) -> None:
-        if event.select.id != "agent":
-            return
-        agent = event.value if isinstance(event.value, str) else DEFAULT_LAUNCH_AGENT
-        model = self.query_one("#model", Select)
-        model.set_options(self._choices(LAUNCH_AGENT_MODELS[agent]))
-        model.value = DEFAULT_LAUNCH_CHOICE
-        efforts = LAUNCH_AGENT_EFFORTS[agent]
-        effort = self.query_one("#effort", Select)
-        effort.set_options(self._choices(efforts))
-        effort.value = DEFAULT_LAUNCH_CHOICE
-        effort.disabled = len(efforts) == 1
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "launch":
-            self._launch()
-        else:
-            self.app.pop_screen()
-
-    @staticmethod
-    def _select_value(select: Select, fallback: str) -> str:
-        return select.value if isinstance(select.value, str) else fallback
-
-    def _current_agent(self) -> str:
-        return self._select_value(
-            self.query_one("#agent", Select), DEFAULT_LAUNCH_AGENT
-        )
-
-    def _cycle_select(self, select_id: str, values: tuple[str, ...]) -> None:
-        """Advance a picker to its next option, wrapping around."""
-        if len(values) <= 1:
-            return
-        select = self.query_one(f"#{select_id}", Select)
-        current = self._select_value(select, values[0])
-        try:
-            index = values.index(current)
-        except ValueError:
-            index = -1
-        # Setting agent fires Select.Changed, which repopulates model/effort.
-        select.value = values[(index + 1) % len(values)]
-
-    def action_cycle_agent(self) -> None:
-        self._cycle_select("agent", tuple(LAUNCH_AGENT_LABELS))
-
-    def action_cycle_model(self) -> None:
-        self._cycle_select("model", LAUNCH_AGENT_MODELS[self._current_agent()])
-
-    def action_cycle_effort(self) -> None:
-        self._cycle_select("effort", LAUNCH_AGENT_EFFORTS[self._current_agent()])
-
-    def action_edit_instruction(self) -> None:
-        self.query_one("#instruction", TextArea).focus()
-
-    def _launch(self) -> None:
-        self._agent = self._select_value(
-            self.query_one("#agent", Select), DEFAULT_LAUNCH_AGENT
-        )
-        self._model = self._select_value(
-            self.query_one("#model", Select), DEFAULT_LAUNCH_CHOICE
-        )
-        self._effort = self._select_value(
-            self.query_one("#effort", Select), DEFAULT_LAUNCH_CHOICE
-        )
-        self._instruction = self.query_one("#instruction", TextArea).text
-        self._devshell = self.query_one("#devshell", Checkbox).value
-        self.query_one("#launch", Button).disabled = True
-        self._start_agent()
-
-    @work(thread=True, exclusive=True)
-    def _start_agent(self) -> None:
-        try:
-            window = self.service.launch_agent(
-                self.run,
-                agent=self._agent,
-                model=self._model,
-                effort=self._effort,
-                instruction=self._instruction,
-                devshell=self._devshell,
-            )
-        except (CommandError, OSError) as exc:
-            self.app.call_from_thread(self._failed, str(exc))
-        else:
-            self.app.call_from_thread(self._launched, window)
-
-    def _failed(self, message: str) -> None:
-        self.query_one("#error", Static).update(message)
-        self.query_one("#launch", Button).disabled = False
-
-    def _launched(self, window: str) -> None:
-        self.app.pop_screen()
-        dashboard = self.app.screen
-        if isinstance(dashboard, DashboardScreen):
-            dashboard.refresh_runs()
-            dashboard._set_notice(f"Agent started in tiri window {window}")
-
-    def action_back(self) -> None:
-        self.app.pop_screen()
-
-
 class CleanupScreen(Screen):
     BINDINGS = [
         ("enter", "confirm", "Remove worktree"),
@@ -1545,234 +940,6 @@ class CleanupScreen(Screen):
 
     def action_cancel(self) -> None:
         self.app.pop_screen()
-
-
-class HistoryScreen(Screen[PromptHistory | None]):
-    BINDINGS = [
-        ("escape", "cancel", "Back"),
-        ("/", "search", "Search"),
-    ]
-
-    def __init__(self, *, repository: Repository | None = None) -> None:
-        super().__init__()
-        self.repository = repository
-
-    def compose(self) -> ComposeResult:
-        with VerticalScroll(id="dialog", classes="wide"):
-            yield Label("Choose a historical prompt as a template", classes="dialog-title")
-            yield HistorySearchInput(placeholder="Filter by commit, run, or prompt text", id="search")
-            yield NavigableDataTable(id="history", cursor_type="row", zebra_stripes=True)
-            yield Static(
-                "↑/↓ or j/k select  ·  Enter choose  ·  / search  ·  Esc back",
-                classes="key-hint",
-            )
-            yield Static("", id="error")
-            with Horizontal(classes="buttons"):
-                yield Button("Use as template and edit", id="use", classes="dialog-action")
-                yield Button("Back", id="cancel")
-
-    def on_mount(self) -> None:
-        table = self.query_one("#history", DataTable)
-        table.add_columns("COMMIT", "DATE", "RUN", "PROMPT")
-        try:
-            self.items = self.app.service.for_repository(
-                self.repository
-            ).prompt_history()
-        except CommandError as exc:
-            self.items = []
-            self.query_one("#error", Static).update(str(exc))
-        self._fill("")
-        table.focus()
-
-    def _fill(self, search: str) -> None:
-        table = self.query_one("#history", DataTable)
-        table.clear()
-        needle = search.casefold()
-        self.filtered_items = [
-            item for item in self.items
-            if needle in f"{item.commit} {item.date} {item.subject} {item.prompt}".casefold()
-        ]
-        for item in self.filtered_items:
-            table.add_row(item.commit[:8], item.date, item.subject, item.preview[:60], key=item.commit)
-
-    def on_input_changed(self, event: Input.Changed) -> None:
-        self._fill(event.value)
-
-    def on_input_submitted(self, _event: Input.Submitted) -> None:
-        self._choose()
-
-    def on_data_table_row_selected(self, _event: DataTable.RowSelected) -> None:
-        self._choose()
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "use":
-            self._choose()
-        else:
-            self.dismiss(None)
-
-    def _choose(self) -> None:
-        row = self.query_one("#history", DataTable).cursor_row
-        if self.filtered_items and row < len(self.filtered_items):
-            self.dismiss(self.filtered_items[row])
-
-    def move_selection(self, offset: int) -> None:
-        table = self.query_one("#history", DataTable)
-        if not self.filtered_items:
-            return
-        table.move_cursor(row=max(0, min(table.cursor_row + offset, len(self.filtered_items) - 1)))
-
-    def action_search(self) -> None:
-        self.query_one("#search", Input).focus()
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
-
-
-class ConfirmScreen(Screen):
-    BINDINGS = [("escape", "back", "Back")]
-
-    def __init__(self, draft: LaunchDraft) -> None:
-        super().__init__()
-        self.draft = draft
-
-    @property
-    def service(self) -> AgentmonService:
-        return self.app.service.for_repository(self.draft.repository)
-
-    def compose(self) -> ComposeResult:
-        preview = next((x.strip() for x in self.draft.prompt.splitlines() if x.strip()), "")
-        agent_name = LAUNCH_AGENT_LABELS.get(self.draft.agent, self.draft.agent)
-        if self.draft.restart_worktree:
-            branch_summary = (
-                f"Restart branch  {self.draft.branch} "
-                f"(from {self.service.repo.branch})"
-            )
-        elif self.draft.existing_branch:
-            branch_summary = f"Existing branch {self.draft.branch}"
-        else:
-            branch_summary = (
-                f"New branch      {self.draft.branch} "
-                f"(from {self.service.repo.branch})"
-            )
-        overwrite = (
-            f"Existing worktree at {self.draft.worktree} will be deleted.\n"
-            if self.draft.overwrite_worktree
-            else ""
-        )
-        first_step = (
-            "  1. Recreate the existing branch/worktree from the dashboard branch\n"
-            if self.draft.restart_worktree
-            else "  1. Delete the existing worktree and create a new branch/worktree\n"
-            if self.draft.overwrite_worktree
-            else "  1. Create worktree from the existing branch\n"
-            if self.draft.existing_branch
-            else "  1. Create branch and worktree\n"
-        )
-        with VerticalScroll(id="dialog", classes="wide"):
-            yield Label(f"Launch {self.draft.branch}?", classes="dialog-title")
-            yield Static(
-                f"Repository     {self.service.repo.root}\n"
-                f"{branch_summary}\n"
-                f"{'Reused worktree' if self.draft.restart_worktree else 'New worktree'}   "
-                f"{self.draft.worktree}\n"
-                f"Agent          {agent_name}\n"
-                f"Instruction    {len(self.draft.prompt.splitlines())} lines · {preview[:60]}"
-            )
-            yield Static(
-                overwrite
-                + "Will perform\n"
-                + first_step
-                + "  2. Write instruction.md and commit it\n"
-                + "  3. Create an tiri window in the worktree\n"
-                + f"  4. Run {agent_name} with the instruction",
-                classes="steps",
-            )
-            with Horizontal(classes="buttons"):
-                yield Button("Launch", id="launch", classes="dialog-action")
-                yield Button("Back", id="back")
-                yield Button("Cancel", id="cancel")
-
-    def on_mount(self) -> None:
-        self.query_one("#launch", Button).focus()
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "launch":
-            self.app.push_screen(LaunchScreen(self.draft))
-        elif event.button.id == "back":
-            self.app.pop_screen()
-        else:
-            self.app.pop_screen()
-            self.app.pop_screen()
-
-    def action_back(self) -> None:
-        self.app.pop_screen()
-
-
-class LaunchScreen(Screen):
-    def __init__(self, draft: LaunchDraft) -> None:
-        super().__init__()
-        self.draft = draft
-        self.lines: list[str] = []
-        self.failed = False
-
-    def compose(self) -> ComposeResult:
-        agent_name = LAUNCH_AGENT_LABELS.get(self.draft.agent, self.draft.agent)
-        with VerticalScroll(id="dialog", classes="wide"):
-            yield Label(
-                f"Launching {self.draft.branch} with {agent_name}",
-                classes="dialog-title",
-            )
-            yield Static("Starting…", id="progress")
-            with Horizontal(classes="buttons", id="done-buttons"):
-                yield Button("Return to dashboard", id="dashboard", disabled=True)
-
-    def on_mount(self) -> None:
-        self._launch()
-
-    def _record(self, step: LaunchStep) -> None:
-        suffix = f" ({step.detail})" if step.detail else ""
-        self.lines.append(f"✓ {step.label}{suffix}")
-        self.query_one("#progress", Static).update("\n".join(self.lines))
-
-    def _failed(self, message: str) -> None:
-        self.failed = True
-        self.lines.append(f"! {message}")
-        self.query_one("#progress", Static).update("\n".join(self.lines))
-        button = self.query_one("#dashboard", Button)
-        button.label = "Back to form"
-        button.disabled = False
-        button.focus()
-
-    def _succeeded(self, window: str) -> None:
-        self.lines.append(f"\nAgent started in tiri window {window}")
-        self.query_one("#progress", Static).update("\n".join(self.lines))
-        button = self.query_one("#dashboard", Button)
-        button.disabled = False
-        button.focus()
-
-    @work(thread=True, exclusive=True)
-    def _launch(self) -> None:
-        try:
-            window = self.app.service.for_repository(
-                self.draft.repository
-            ).launch(
-                self.draft,
-                lambda step: self.app.call_from_thread(self._record, step),
-            )
-        except (CommandError, OSError) as exc:
-            self.app.call_from_thread(self._failed, str(exc))
-        else:
-            self.app.call_from_thread(self._succeeded, window)
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "dashboard":
-            self.app.pop_screen()
-            self.app.pop_screen()
-            if not self.failed:
-                self.app.pop_screen()
-            dashboard = self.app.screen
-            if isinstance(dashboard, DashboardScreen):
-                dashboard.refresh_runs()
 
 
 class QuotaScreen(ModalScreen):
@@ -2090,9 +1257,6 @@ class DemoService(AgentmonService):
         "old-fix": "Fix the parser edge case found during review.\n",
     }
 
-    def run_instruction(self, run: AgentRun) -> str | None:
-        return self.DEMO_INSTRUCTIONS.get(run.branch)
-
     def worktree_overview(self, run: AgentRun) -> WorktreeOverview:
         instruction = self.DEMO_INSTRUCTIONS.get(run.branch)
         return WorktreeOverview(
@@ -2106,41 +1270,6 @@ class DemoService(AgentmonService):
             committed_changes=True,
             dirty=run.worktree_state == "dirty",
         )
-
-    def prepare_worktree(
-        self, branch: str, *, base: str | None = None, reset: bool = False
-    ) -> Path:
-        raise CommandError("Demo mode does not make changes")
-
-    def instruction_edit_target(self, run: AgentRun) -> Path:
-        raise CommandError("Demo mode does not make changes")
-
-    def commit_instruction(self, run: AgentRun) -> str | None:
-        raise CommandError("Demo mode does not make changes")
-
-    def launch_agent(self, run: AgentRun, **kwargs) -> str:
-        raise CommandError("Demo mode does not make changes")
-
-    def populate_draft(self, run: AgentRun) -> LaunchDraft:
-        prompt = self.DEMO_INSTRUCTIONS.get(run.branch, f"{run.prompt_preview}\n")
-        agent = normalize_launch_agent(run.agent)
-        return LaunchDraft(
-            run.branch,
-            self.suggested_worktree(run.branch),
-            prompt,
-            agent=agent,
-            repository=self.repo,
-        )
-
-    def prompt_history(self, limit: int = 50) -> list[PromptHistory]:
-        return [
-            PromptHistory("a" * 40, "2026-07-09", "auth-timeout", "Fix timeout handling in the auth client.\n"),
-            PromptHistory("b" * 40, "2026-06-28", "login-tests", "Add coverage for expired credentials.\n"),
-        ]
-
-    def launch(self, draft: LaunchDraft, progress) -> str:
-        raise CommandError("Demo mode does not make changes")
-
 
 class DemoQuotaService(QuotaService):
     def report(self, *, force: bool = False) -> QuotaReport:
@@ -2196,29 +1325,15 @@ class AgentmonApp(App):
     #dialog { width: 72; height: auto; max-width: 100%; max-height: 100%;
               margin: 1 2; padding: 1 2;
               border: round #6aa9d8; background: #171d24; }
-    #dialog.wide { width: 92; }
-    #dialog.new-run { scrollbar-size: 1 1; }
     .dialog-title { height: 2; color: #ffffff; text-style: bold; }
-    #draft-fields { height: 4; }
-    #draft-fields .draft-field { width: 1fr; }
-    #launch-fields { height: 4; }
-    #launch-fields .draft-field { width: 1fr; }
-    #instruction { height: 10; margin-bottom: 1; }
     .buttons { height: 3; margin-top: 0; }
     .buttons Button { margin-right: 1; }
     .buttons .dialog-action { background: #293440; color: #d7dde5; text-style: none; }
     .buttons .dialog-action:hover { background: #354555; color: #ffffff; }
     .buttons .dialog-action:focus { background: #3f8fc4; color: #ffffff; text-style: bold; }
     .buttons .dialog-action:disabled { background: #202832; color: #65717e; text-style: none; }
-    #worktree, #prompt-status { min-height: 2; }
     #error { min-height: 1; }
-    #error.guidance { color: #8492a0; }
-    #error.validation-error { color: #ff6b6b; }
-    #error.overwrite-info { color: #ffcb6b; }
-    DataTable#history { height: 14; margin-top: 1; }
     .key-hint { height: 2; padding-top: 1; color: #8492a0; }
-    .steps { margin-top: 1; padding: 1; background: #202832; }
-    #progress { min-height: 8; padding: 1; background: #202832; }
     Footer { background: #202832; }
     QuotaScreen { align: center middle; background: transparent; }
     #quota-dialog { width: 88; height: auto; max-width: 100%; max-height: 100%;
@@ -2254,31 +1369,6 @@ class AgentmonApp(App):
             self.action_toggle_quotas,
         )
         if isinstance(screen, DashboardScreen):
-            yield SystemCommand(
-                "Prepare worktree",
-                "Create a sibling worktree for a new or existing branch",
-                screen.action_prepare_worktree,
-            )
-            yield SystemCommand(
-                "Setup instruction",
-                "Edit and commit instruction.md for the selected worktree",
-                screen.action_edit_instruction,
-            )
-            yield SystemCommand(
-                "Launch agent",
-                "Start Codex or Claude Code in the selected worktree",
-                screen.action_launch_agent,
-            )
-            yield SystemCommand(
-                "Simple run",
-                "Create worktree, write instruction, and launch an agent in one flow",
-                screen.action_new_run,
-            )
-            yield SystemCommand(
-                "Populate from run",
-                "Start the full new-run flow pre-filled from the selected run",
-                screen.action_populate_run,
-            )
             yield SystemCommand(
                 "Open window",
                 "Switch to the selected run's tiri window",

@@ -1,7 +1,7 @@
 [project]
 name = "tiri-agentmon"
 version = "0.1.0"
-description = "Create and monitor coding-agent runs in git worktrees through tiri."
+description = "Monitor coding agents through tiri, and loop one prompt with looper."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

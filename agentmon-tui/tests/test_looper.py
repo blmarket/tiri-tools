@@ -689,9 +689,9 @@ class _FakeContext:
     def __init__(self, root: Path) -> None:
         self.warning = ""
         self.repository = Repository(root, root / ".git", "main")
-
-    def service(self) -> object:
-        return object()
+        self.socket = str(root / "tiri.sock")
+        self.tmux = "tmux"
+        self.session = None
 
 
 class _FakeLooper:

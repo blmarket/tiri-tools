@@ -34,12 +34,8 @@ from pathlib import Path
 
 from . import __version__
 from .quota import QuotaReport, QuotaService, QuotaWindow
-from .services import (
-    AgentmonService,
-    CommandError,
-    devshell_available,
-    discover_context,
-)
+from .launcher import AgentLauncher, devshell_available
+from .services import CommandError, discover_context
 
 
 @dataclass(frozen=True)
@@ -181,7 +177,7 @@ class Looper:
 
     def __init__(
         self,
-        service: AgentmonService,
+        service: AgentLauncher,
         *,
         worktree: Path,
         pane: str,
@@ -502,7 +498,7 @@ def main(argv: list[str] | None = None) -> int:
             instruction_file = directory / "prompt.md"
             instruction_file.write_text(prompt, encoding="utf-8")
         looper = Looper(
-            context.service(),
+            AgentLauncher.from_context(context),
             worktree=context.repository.root,
             pane=pane,
             instruction_file=instruction_file,
