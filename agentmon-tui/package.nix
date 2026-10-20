@@ -1,4 +1,4 @@
-{ lib, python3Packages, git, tmux }:
+{ lib, python3Packages, git }:
 
 # Package the `agentmon` dashboard and its companion `looper` together.
 python3Packages.buildPythonApplication {
@@ -18,17 +18,13 @@ python3Packages.buildPythonApplication {
     python3Packages.pytestCheckHook
   ];
   pythonImportsCheck = [ "agentmon" ];
-  # Suffixed, not prefixed: these are a fallback for a bare environment. A
-  # caller that pins its own `tmux` — a checkout testing one version against
-  # another does — must keep it ahead of nixpkgs'.
+  # Suffixed, not prefixed: a fallback for a bare environment. The tmux client
+  # is the caller's, taken from `PATH`.
   makeWrapperArgs = [
     "--suffix"
     "PATH"
     ":"
-    (lib.makeBinPath [
-      git
-      tmux
-    ])
+    (lib.makeBinPath [ git ])
   ];
 
   meta.mainProgram = "agentmon";

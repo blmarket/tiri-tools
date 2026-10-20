@@ -1,4 +1,4 @@
-{ lib, python3Packages, tmux, openssh, callPackage }:
+{ lib, python3Packages, openssh, callPackage }:
 
 python3Packages.buildPythonApplication {
   pname = "hmux-webmon";
@@ -15,17 +15,15 @@ python3Packages.buildPythonApplication {
     (callPackage ../agentmon-tui/package.nix { })
   ];
   nativeCheckInputs = [
-    tmux
     openssh
     python3Packages.pytestCheckHook
   ];
-  SUT = "stock";
   pythonImportsCheck = [ "webmon" ];
   makeWrapperArgs = [
     "--prefix"
     "PATH"
     ":"
-    (lib.makeBinPath [ tmux openssh ])
+    (lib.makeBinPath [ openssh ])
   ];
 
   meta.mainProgram = "webmon";

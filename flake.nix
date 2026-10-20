@@ -17,9 +17,8 @@
           pkgs = nixpkgs.legacyPackages.${system};
         in
         rec {
-          tmux = pkgs.callPackage ./nix/tmux.nix { };
           agentmon = pkgs.callPackage ./agentmon-tui/package.nix { };
-          webmon = pkgs.callPackage ./webmon/package.nix { inherit tmux; };
+          webmon = pkgs.callPackage ./webmon/package.nix { };
           default = pkgs.symlinkJoin {
             name = "tiri-tools";
             paths = [ agentmon webmon ];
