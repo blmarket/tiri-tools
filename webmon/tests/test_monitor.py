@@ -1,11 +1,12 @@
 """The monitor against a live server: model, viewing, and client lifecycle."""
 
 import asyncio
+import json
 import re
 
 from conftest import run_async
 
-from webmon.monitor import Monitor
+from webmon.monitor import Monitor, trim_history
 
 
 class Recorder:
@@ -279,3 +280,55 @@ def test_shared_captures_preserve_output_order_for_every_viewer(server):
             await monitor.stop()
 
     run_async(scenario())
+
+
+def test_a_snapshot_carries_history_that_scrolled_off_before_attach(server):
+    async def scenario():
+        monitor = await started(server)
+        watcher = Recorder()
+        monitor.add_watcher(watcher)
+        try:
+            server.command("new-window", "-t", "work", "-n", "long", "sh -c 'seq 1 200; sleep 600'")
+            assert await until(lambda: any(p["window_name"] == "long" for p in monitor.model.panes.values()), timeout=15)
+            pane = next(p for p, values in monitor.model.panes.items() if values["window_name"] == "long")
+            server.wait_for(lambda: "200" in server.command("capture-pane", "-p", "-t", pane))
+            await monitor.watch_pane(pane, watcher)
+            await monitor.repaint(pane, watcher)
+            return [payload for _, payload in watcher.resets]
+        finally:
+            await monitor.stop()
+
+    first, repainted = run_async(scenario())
+    for payload in (first, repainted):
+        lines = payload["data"].removeprefix("\x1bc").split("\r\n")
+        assert "2" in lines, "a line already scrolled off the screen is missing"
+        assert lines.index("200") > len(lines) - payload["rows"] - 1, "the screen has to stay last"
+
+
+def test_a_fresh_pane_snapshot_is_just_the_screen(server):
+    async def scenario():
+        monitor = await started(server)
+        watcher = Recorder()
+        monitor.add_watcher(watcher)
+        try:
+            server.command("new-window", "-t", "work", "-n", "fresh", "sh -c 'sleep 600'")
+            assert await until(lambda: any(p["window_name"] == "fresh" for p in monitor.model.panes.values()), timeout=15)
+            pane = next(p for p, values in monitor.model.panes.items() if values["window_name"] == "fresh")
+            await monitor.watch_pane(pane, watcher)
+            return watcher.resets[0][1]
+        finally:
+            await monitor.stop()
+
+    payload = run_async(scenario())
+    assert len(payload["data"].split("\r\n")) == payload["rows"]
+
+
+def test_history_is_trimmed_oldest_first_to_its_encoded_budget():
+    screen = [b"screen"] * 3
+    history = [b"\x1b[1m%04d" % index for index in range(100)]
+    kept = trim_history(history + screen, rows=3, budget=200)
+    assert kept[-3:] == screen
+    assert kept[:-3] == history[len(history) - len(kept) + 3 :]
+    assert 0 < len(kept) - 3 < 100
+    assert sum(len(json.dumps(line.decode("latin-1"))) + 2 for line in kept[:-3]) <= 200
+    assert trim_history(screen, rows=3, budget=0) == screen

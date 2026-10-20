@@ -28,13 +28,33 @@ function makeTerminal() {
     convertEol: false,
     disableStdin: true,
     cursorBlink: false,
-    scrollback: 0,
+    scrollback: 2000,
     fontSize: 13,
     fontFamily: 'ui-monospace, "SF Mono", "DejaVu Sans Mono", Menlo, monospace',
     theme: { background: "#0e1015", foreground: "#d7dce5" },
   });
   term.open(el.screen);
+  scrollOnWheel(term);
   return term;
+}
+
+// The view is read-only, so the wheel always scrolls history. Left to xterm,
+// a pane with mouse reporting on (Claude Code, vim) would turn it into mouse
+// reports that go nowhere.
+function scrollOnWheel(term) {
+  let pending = 0;
+  term.attachCustomWheelEventHandler((event) => {
+    if (Math.abs(event.deltaY) < Math.abs(event.deltaX)) return false;
+    event.preventDefault();
+    const cellHeight = term.element.querySelector(".xterm-screen").clientHeight / term.rows || 16;
+    pending += event.deltaMode === WheelEvent.DOM_DELTA_LINE ? event.deltaY
+      : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? event.deltaY * term.rows
+      : event.deltaY / cellHeight;
+    const lines = Math.trunc(pending);
+    pending -= lines;
+    if (lines) term.scrollLines(lines);
+    return false;
+  });
 }
 
 function updateViewport() {
@@ -128,7 +148,8 @@ function applyScreen(message) {
   const data = message.data || "";
   const bytes = new Uint8Array(data.length);
   for (let i = 0; i < data.length; i++) bytes[i] = data.charCodeAt(i) & 0xff;
-  state.term.write(bytes);
+  const term = state.term;
+  term.write(bytes, () => term.scrollToBottom());
   el.screenState.textContent = "";
   requestAnimationFrame(updateViewport);
 }

@@ -12,7 +12,7 @@ import socket
 import subprocess
 from pathlib import Path
 
-from .monitor import Monitor
+from .monitor import SNAPSHOT_HISTORY_LINES, Monitor
 from .server import HttpServer
 
 DEFAULT_HOST = "127.0.0.1"
@@ -100,6 +100,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--poll-interval", type=float, default=30.0, help="seconds between full polls"
     )
     parser.add_argument("--stream-columns", type=int, default=100, help="requested browser client columns (default: 100; 0 disables browser sizing)")
+    parser.add_argument("--snapshot-history", type=int, default=SNAPSHOT_HISTORY_LINES, help=f"history lines sent above each screen snapshot for scrollback (default: {SNAPSHOT_HISTORY_LINES}; 0 disables)")
     parser.add_argument("--verbose", "-v", action="store_true")
     parser.add_argument("--provider", metavar="URL", default=os.environ.get("WEBMON_PROVIDER"), help="GraphQL endpoint for outbound provider mode")
     parser.add_argument("--signing-key", default=os.environ.get("WEBMON_SIGNING_KEY", "~/.config/webmon/signing-key.jwk"), help="registered P-256 private JWK, SSH private key, or agent public key (default: ~/.config/webmon/signing-key.jwk)")
@@ -110,6 +111,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     options = parser.parse_args(argv)
     if options.stream_columns != 0 and not 1 <= options.stream_columns <= 10000:
         parser.error("--stream-columns must be 0 or between 1 and 10000")
+    if not 0 <= options.snapshot_history <= 100000:
+        parser.error("--snapshot-history must be between 0 and 100000")
     if options.provider and not options.signing_key:
         parser.error("--provider requires --signing-key (or WEBMON_SIGNING_KEY)")
     return options
@@ -119,7 +122,8 @@ async def serve(options: argparse.Namespace) -> None:
     socket_path = discover_socket(options.socket, tmux=options.tmux)
     monitor = Monitor(
         options.tmux, socket_path, poll_interval=options.poll_interval,
-        stream_columns=options.stream_columns or None
+        stream_columns=options.stream_columns or None,
+        snapshot_history=options.snapshot_history,
     )
     server = None
     tasks = []

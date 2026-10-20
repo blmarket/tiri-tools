@@ -152,3 +152,10 @@ def test_stream_columns_default_opt_out_and_validation():
     assert cli.parse_args(["--stream-columns", "80"]).stream_columns == 80
     with pytest.raises(SystemExit):
         cli.parse_args(["--stream-columns", "-1"])
+
+
+def test_snapshot_history_default_opt_out_and_validation():
+    assert cli.parse_args([]).snapshot_history == 2000
+    assert cli.parse_args(["--snapshot-history", "0"]).snapshot_history == 0
+    with pytest.raises(SystemExit):
+        cli.parse_args(["--snapshot-history", "-1"])

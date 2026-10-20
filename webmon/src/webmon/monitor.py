@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import re
 import time
@@ -43,6 +44,12 @@ PAUSE_AFTER_SECONDS = 2
 # Long enough that a pane flooding continuously settles into snapshots rather
 # than a pause/continue storm.
 RESUME_DELAY = 0.25
+# History a snapshot carries above the screen, so a browser can scroll back
+# past what it saw live; every repaint refills what its RIS wipes. Also capped
+# by JSON size, because one reset over the provider's message limit drops the
+# whole provider connection.
+SNAPSHOT_HISTORY_LINES = 2000
+SNAPSHOT_HISTORY_BYTES = 256 << 10
 
 
 class Watcher(Protocol):
@@ -103,6 +110,24 @@ def snapshot_bytes(screen: bytes, cursor: tuple[int, int] | None) -> bytes:
         column, row = cursor
         payload += b"\x1b[%d;%dH" % (row + 1, column + 1)
     return payload
+
+
+def trim_history(lines: list[bytes], rows: int, budget: int = SNAPSHOT_HISTORY_BYTES) -> list[bytes]:
+    """Drop the oldest history lines until the rest fits `budget` as JSON.
+
+    The last `rows` lines are the screen and always stay. Lines are costed as
+    the ASCII-escaped JSON they travel as, where an ESC or a high byte is six
+    bytes, not one.
+    """
+    start = max(0, len(lines) - rows)
+    used = 0
+    while start > 0:
+        cost = len(json.dumps(lines[start - 1].decode("latin-1"))) + 2
+        if used + cost > budget:
+            break
+        used += cost
+        start -= 1
+    return lines[start:]
 
 
 class SessionViewer:
@@ -191,22 +216,25 @@ class SessionViewer:
                 if len(parts) != 4 or not all(part.isdigit() for part in parts):
                     return
                 cursor = (int(parts[0]), int(parts[1]))
+                lines = trim_history(screen.lines, int(parts[3]))
                 payload = {
                     "t": "screen",
                     "pane": pane,
                     "cols": int(parts[2]),
                     "rows": int(parts[3]),
                     "sizing_columns": self.monitor.stream_sizes.columns or 0,
-                    "data": snapshot_bytes(screen.raw, cursor).decode("latin-1"),
+                    "data": snapshot_bytes(b"\n".join(lines), cursor).decode("latin-1"),
                 }
                 for watcher in list(self.monitor.pane_watchers.get(pane, ())):
                     watcher.deliver_reset(pane, payload)
                 self._pending_snapshot.discard(pane)
 
+            history = self.monitor.snapshot_history
+            start = f" -S -{history}" if history else ""
             self._pending_snapshot.add(pane)
             try:
                 await self.client.execute_group([
-                    f"capture-pane -e -p -t {pane}",
+                    f"capture-pane -e -p{start} -t {pane}",
                     f"display-message -p -t {pane} '#{{cursor_x}} #{{cursor_y}} #{{pane_width}} #{{pane_height}}'",
                 ], captured)
             except (ConnectionError, asyncio.TimeoutError) as exc:
@@ -262,9 +290,11 @@ class Monitor:
         poll_interval: float = POLL_INTERVAL,
         reconcile_interval: float = RECONCILE_INTERVAL,
         stream_columns: int | None = None,
+        snapshot_history: int = SNAPSHOT_HISTORY_LINES,
     ) -> None:
         self.tmux = tmux
         self.socket = socket
+        self.snapshot_history = snapshot_history
         self.poll_interval = poll_interval
         self.reconcile_interval = reconcile_interval
         self.model = Model()
